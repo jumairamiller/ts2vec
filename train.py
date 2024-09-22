@@ -1,10 +1,19 @@
+import config
+import device
+import pandas as pd
 import torch
+from matplotlib import pyplot as plt
+from scipy.ndimage import label
+from torch import nn
 import numpy as np
 import argparse
 import os
 import sys
 import time
 import datetime
+
+from sklearn.preprocessing import MinMaxScaler
+
 from ts2vec import TS2Vec
 import tasks
 import datautils
@@ -45,6 +54,11 @@ if __name__ == '__main__':
 
     device = init_dl_program(args.gpu, seed=args.seed, max_threads=args.max_threads)
 
+    # Define variables outside the conditional block for online retail dataset
+    customer_embedding_layer = None
+    customer_id_to_index = None
+
+
     print('Loading data... ', end='')
     if args.loader == 'UCR':
         task_type = 'classification'
@@ -58,6 +72,7 @@ if __name__ == '__main__':
         task_type = 'forecasting'
         data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols = datautils.load_forecast_csv(args.dataset)
         train_data = data[:, train_slice]
+        test_data = data[:, test_slice]
 
     elif args.loader == 'forecast_csv_univar':
         task_type = 'forecasting'
@@ -84,9 +99,14 @@ if __name__ == '__main__':
         all_train_data, all_train_labels, all_train_timestamps, all_test_data, all_test_labels, all_test_timestamps, delay = datautils.load_anomaly(args.dataset)
         train_data, _, _, _ = datautils.load_UCR('FordA')
 
+    # elif args.loader == 'retail':
+    #     task_type = 'forecasting'
+    #
+    #     # Load the data
+    #     train_data, valid_data, test_data, customer_embeddings = datautils.load_online_retail(args.dataset, repr_dims=args.repr_dims)
+
     else:
         raise ValueError(f"Unknown loader {args.loader}.")
-
 
     if args.irregular > 0:
         if task_type == 'classification':
@@ -112,31 +132,96 @@ if __name__ == '__main__':
 
     t = time.time()
 
-    model = TS2Vec(
-        input_dims=train_data.shape[-1],
-        device=device,
-        **config
-    )
-    loss_log = model.fit(
-        train_data,
-        n_epochs=args.epochs,
-        n_iters=args.iters,
-        verbose=True
-    )
+    # Define the TS2Vec model
+    if args.loader == 'retail':
+        # Initialise the loss log fir tracking losses during training
+        loss_log = []
+        # Initialise the model
+        model = TS2Vec(
+            input_dims=2,  # We are using 'Quantity' and 'Price' as input dimensions
+            device=device,
+            **config,
+            use_customer_embs=True  # Specify that we are using customer embeddings
+        )
+
+        # Training loop with customer ID fixed embeddings as input
+        for epoch in range(args.epochs):
+            '''For retail loader, `train_data`, `valid_data`, and `test_data` are dictionaries where each key is
+            a `customer_id` and the value is a DataFrame with shape `(n_transactions, n_features)`. The model will 
+            train on 'data_array`, which is reshaped to `(n_instances, n_timestamps, n_dimensions)`.'''
+            epoch_loss = 0
+            for customer_id, data in train_data.items():
+
+
+                # Get the customer embedding
+                customer_idx = torch.tensor(customer_id_to_index[customer_id], device = device)
+                customer_embedding = customer_embedding_layer(customer_idx).unsqueeze(0).unsqueeze(0)
+
+                # Convert data to the required format
+                data_array = data.to_numpy()
+                data_array = torch.tensor(data_array, dtype=torch.float32, device=device)  # Ensure data_array is a torch.Tensor
+
+                # Add the customer embedding to the data
+                data_array += customer_embedding
+
+                # Convert back to NumPy array before training the model
+                data_array = data_array.cpu().numpy()
+
+                # train the model
+                loss_log = model.fit(data_array, n_epochs=1, n_iters=args.iters, verbose=True)
+    else:
+        model = TS2Vec(
+            input_dims=train_data.shape[-1],
+            device=device,
+            **config
+        )
+        # Training code
+        loss_log = model.fit(
+            train_data,
+            n_epochs=args.epochs,
+            n_iters=args.iters,
+            verbose=True
+        )
+
     model.save(f'{run_dir}/model.pkl')
+
+    # Plot the training loss log
+    plt.plot(loss_log, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.grid(True)
+    plt.savefig(f'{run_dir}/loss_plot.png')
+    # Draw a straight line to show the general trend
+    z = np.polyfit(range(len(loss_log)), loss_log, 1)
+    p = np.poly1d(z)
+    plt.plot(range(len(loss_log)), p(range(len(loss_log))), "r--", label='Training Loss Trend')
+    plt.legend()
+    # Save the plot
+    plt.savefig(f'{run_dir}/train_loss_plot.png')
+    plt.show()
 
     t = time.time() - t
     print(f"\nTraining time: {datetime.timedelta(seconds=t)}\n")
 
     if args.eval:
-        out = None # Initialise out as None to avoid the NameError in the case of unsupervised tasks
+        out = None # Initialise 'out' as None to avoid the NameError in the case of unsupervised tasks
 
         if task_type == 'classification':
             out, eval_res = tasks.eval_classification(model, train_data, train_labels, test_data, test_labels, eval_protocol='svm')
         elif task_type == 'forecasting':
             # add case for unsupervised evaluation on Online Retail dataset
             if args.dataset == 'ts2vec_online_retail_II_data':
-                eval_res = tasks.eval_forecasting_unsupervised(model, data, train_slice, valid_slice, test_slice, scaler, n_covariate_cols)
+                # # print data shapes and check for NaN or infinite values
+                # print("Data shape:", data.shape)
+                # print("Train slice:", train_slice)
+                # print("Valid slice:", valid_slice)
+                # print("Test slice:", test_slice)
+                # print("Scaler:", scaler)
+                # print("Prediction lengths:", pred_lens)
+                # print("Number of covariate columns:", n_covariate_cols)
+                out, eval_res = tasks.eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols, args.dataset)
+
             else:
                 out, eval_res = tasks.eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols)
         elif task_type == 'anomaly_detection':
@@ -153,5 +238,5 @@ if __name__ == '__main__':
         pkl_save(f'{run_dir}/eval_res.pkl', eval_res)
         print('Evaluation result:', eval_res)
 
-    print("Finished.")
+        print("Finished.")
 

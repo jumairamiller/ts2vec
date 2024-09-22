@@ -5,6 +5,9 @@ import math
 import random
 from datetime import datetime
 import pickle
+
+import torch
+
 from utils import pkl_load, pad_nan_to_target
 from scipy.io.arff import loadarff
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
@@ -146,7 +149,7 @@ def load_forecast_csv(name, univar=False):
     Returns:
     tuple: data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols
     """
-    # Try loading with 'date' as index, if it fails, try with 'InvoiceDate'
+    # Try loading with 'date' as index, if it fails, try with 'InvoiceDate' to load online retail data
     try:
         data = pd.read_csv(f'datasets/{name}.csv', index_col='date', parse_dates=True)
     except ValueError:
@@ -168,10 +171,6 @@ def load_forecast_csv(name, univar=False):
             data = data[['MT_001']]
         else:
             data = data.iloc[:, -1:]
-    else:
-        # Online Retail II case
-        if name == 'ts2vec_online_retail_II_data':
-            data = data[['Quantity', 'Price']]
 
     # Convert data to numpy array
     data = data.to_numpy()
@@ -186,13 +185,18 @@ def load_forecast_csv(name, univar=False):
         valid_slice = slice(12*30*24*4, 16*30*24*4)
         test_slice = slice(16*30*24*4, 20*30*24*4)
     else:
-        # Default case for custom datasets
-        train_slice = slice(None, int(0.6 * len(data)))
+        # Default case for other or custom datasets
+        train_slice = slice(0, int(0.6 * len(data)))
         valid_slice = slice(int(0.6 * len(data)), int(0.8 * len(data)))
-        test_slice = slice(int(0.8 * len(data)), None)
+        test_slice = slice(int(0.8 * len(data)), len(data))
 
     # Normalise data
-    scaler = StandardScaler().fit(data[train_slice])
+    scaler = None
+    if name == 'ts2vec_online_retail_II_data':
+        scaler = MinMaxScaler().fit(data[train_slice])
+    else:
+        scaler = StandardScaler().fit(data[train_slice])
+
     data = scaler.transform(data)
 
     # Reshape data based on dataset structure
@@ -202,12 +206,22 @@ def load_forecast_csv(name, univar=False):
         data = np.expand_dims(data, 0) # Single instance case
 
     if n_covariate_cols > 0:
-        dt_scaler = StandardScaler().fit(dt_embed[train_slice])
+        if name == 'ts2vec_online_retail_II_data':
+            dt_scaler = MinMaxScaler().fit(dt_embed[train_slice])
+        else:
+            dt_scaler = StandardScaler().fit(dt_embed[train_slice])
         dt_embed = np.expand_dims(dt_scaler.transform(dt_embed), 0)
+        # Concatenating the time embeddings to the data
+        ''' NOTE: 
+        The np.repeat(dt_embed, data.shape[0], axis=0) function is used to repeat the time embeddings 
+        for each instance only in the case of the 'electricity' dataset. This ensures that the time 
+        embeddings are correctly aligned with the data instances'''
         data = np.concatenate([np.repeat(dt_embed, data.shape[0], axis=0), data], axis=-1)
 
     if name in ('ETTh1', 'ETTh2', 'electricity'):
         pred_lens = [24, 48, 168, 336, 720]
+    elif name == 'ts2vec_online_retail_II_data':
+        pred_lens = [1, 2, 3, 4, 5]
     else:
         pred_lens = [24, 48, 96, 288, 672]
 
@@ -240,119 +254,89 @@ def _get_time_features(dt):
         dt.to_series().apply(lambda x: x.strftime("%V")).astype(int).to_numpy(), # Week of the year
     ], axis=1).astype(np.float)
 
-#
-# def load_online_retail(name='Cleaned_Online_Retail', agg_freq='D'):
+
+def load_online_retail(name, repr_dims):
 #     """
 #     Loads and preprocesses the Online Retail dataset for forecasting tasks.
-#
-#     Parameters:
-#         name (str): Name of the dataset file (without extension).
-#         agg_freq (str): Aggregation frequency (e.g., 'D' for daily, 'W' for weekly, '2W' for bi-weekly, 'M' for monthly).
+#     Ensures both Price, Quantity, and customer embeddings are included throughout. """
 #
 #     Returns:
-#         data (np.ndarray): Preprocessed time series data.
-#         train_slice (slice): Slice object for training data.
-#         valid_slice (slice): Slice object for validation data.
-#         test_slice (slice): Slice object for testing data.
-#         scaler (StandardScaler): Fitted scaler object.
-#         pred_lens (list): List of prediction lengths.
-#         n_covariate_cols (int): Number of covariate columns.
+#         train_data: Dictionary mapping customer_id to their training data (DataFrame).
+#         valid_data: Dictionary mapping customer_id to their validation data (DataFrame).
+#         test_data: Dictionary mapping customer_id to their test data (DataFrame).
+#         customer_embeddings: Fixed embeddings for each customer ID.
+#         customer_id_to_index: Mapping from customer IDs to embedding indices.
+#         scaler: Fitted scaler for data normalization.
 #     """
-#
-#     # Load data
-#     file_path = f'datasets/UEA/{name}.csv'
-#     df = pd.read_csv(file_path, parse_dates=['InvoiceDate'])
-#
-#     # Convert 'InvoiceDate' to datetime if not already done
-#     if not pd.api.types.is_datetime64_any_dtype(df['InvoiceDate']):
-#         df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
-#
-#     # Set 'InvoiceDate' as index
-#     df.set_index('InvoiceDate', inplace=True)
-#
-#     # Handle different aggregation frequencies
-#     if agg_freq == 'D':
-#         freq = 'D'
-#     elif agg_freq == 'W':
-#         freq = 'W'
-#     elif agg_freq == '2W':
-#         freq = '2W'
-#     elif agg_freq == 'M':
-#         freq = 'M'
-#     else:
-#         raise ValueError("Invalid agg_freq value. Use 'D', 'W', '2W', or 'M'.")
-#
-#     # Aggregate quantity sold per specified frequency
-#     df_agg = df.resample(freq).sum()['Quantity']
-#
-#     # Handle missing values by filling with zeros
-#     df_agg = df_agg.fillna(0)
-#
-#     # Generate time features
-#     time_features = _get_time_features(df_agg.index)
-#     n_covariate_cols = time_features.shape[1]
-#
-#     # Convert to numpy array
-#     data = df_agg.values
-#     data = data.reshape(-1, 1)  # Reshape to (timesteps, features)
-#
-#     # Combine data with time features
-#     data = np.concatenate([time_features, data], axis=1)
-#
-#     # Train/Validation/Test split
-#     total_length = len(data)
-#     train_size = int(total_length * 0.6)
-#     valid_size = int(total_length * 0.2)
-#
-#     train_slice = slice(None, train_size)
-#     valid_slice = slice(train_size, train_size + valid_size)
-#     test_slice = slice(train_size + valid_size, None)
-#
-#     # Scaling
-#     scaler = StandardScaler()
-#     data[train_slice] = scaler.fit_transform(data[train_slice])
-#     data[valid_slice] = scaler.transform(data[valid_slice])
-#     data[test_slice] = scaler.transform(data[test_slice])
-#
-#     # Reshape to (1, timesteps, features) as expected by TS2Vec
-#     data = data[np.newaxis, ...]
-#
-#     # Define prediction lengths based on aggregation frequency
-#     if agg_freq == 'D':
-#         pred_lens = [1, 2, 3, 4, 5, 6, 7]  # Predicting each day for the upcoming week
-#     elif agg_freq == 'W':
-#         pred_lens = [1, 2, 3, 4]  # Predicting each week for the upcoming month (4 weeks)
-#     elif agg_freq == '2W':
-#         pred_lens = [1, 2, 3]  # Predicting 2 weeks, 4 weeks, and 6 weeks ahead (in bi-weekly intervals)
-#     elif agg_freq == 'M':
-#         pred_lens = [1, 2, 3]  # Predicting 1 month, 2 months, and 3 months ahead (in months)
-#     else:
-#         raise ValueError("Invalid agg_freq value. Use 'D', 'W', '2W', or 'M'.")
-#
-#     return data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols
-#     train_slice = slice(None, train_size)
-#     valid_slice = slice(train_size, train_size + valid_size)
-#     test_slice = slice(train_size + valid_size, None)
-#
-#     # Scaling
-#     scaler = StandardScaler()
-#     data[train_slice] = scaler.fit_transform(data[train_slice])
-#     data[valid_slice] = scaler.transform(data[valid_slice])
-#     data[test_slice] = scaler.transform(data[test_slice])
-#
-#     # Reshape to (1, timesteps, features) as expected by TS2Vec
-#     data = data[np.newaxis, ...]
-#
-#     # Define prediction lengths based on aggregation frequency
-#     if agg_freq == 'D':
-#         pred_lens = [1, 2, 3, 4, 5, 6, 7]  # Predicting each day for the upcoming week
-#     elif agg_freq == 'W':
-#         pred_lens = [1, 2, 3, 4]  # Predicting each week for the upcoming month (4 weeks)
-#     elif agg_freq == '2W':
-#         pred_lens = [1, 2, 3]  # Predicting 2 weeks, 4 weeks, and 6 weeks ahead (in bi-weekly intervals)
-#     elif agg_freq == 'M':
-#         pred_lens = [1, 2, 3]  # Predicting 1 month, 2 months, and 3 months ahead (in months)
-#     else:
-#         raise ValueError("Invalid agg_freq value. Use 'D', 'W', '2W', or 'M'.")
-#
-#     return data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols
+
+     # Load data
+    data = pd.read_csv(f'datasets/{name}.csv', parse_dates=['InvoiceDate'])
+
+    # Convert 'InvoiceDate' to datetime if not already done
+    if not pd.api.types.is_datetime64_any_dtype(data['InvoiceDate']):
+        data['InvoiceDate'] = pd.to_datetime(data['InvoiceDate'])
+
+    # Sort data by 'InvoiceDate'
+    data.sort_values(by='InvoiceDate', inplace=True)
+
+    # Rename 'Customer ID' to 'CustomerID'
+    if 'Customer ID' in data.columns:
+        data.rename(columns={'Customer ID': 'CustomerID'}, inplace=True)
+
+    if 'CustomerID' not in data.columns:
+        raise KeyError("The 'CustomerID' column is missing from the dataset.")
+
+    # Extract customerIDs and create numerical mapping
+    customer_ids = data['CustomerID'].unique()
+    customer_id_to_index = {cid: idx for idx, cid in enumerate(customer_ids)}
+
+    # Create fixed embeddings for each unique customer ID
+    customer_embeddings = torch.nn.Embedding(len(customer_ids), repr_dims)
+    customer_embeddings.weight.requires_grad = False  # Fixed embeddings
+
+    # Map customer IDs to their embeddings
+    customer_embeddings_tensor = customer_embeddings(torch.tensor(data['CustomerID'].map(customer_id_to_index).values))
+
+    # Store customer embeddings as a new column 'customer_embed' in the DataFrame
+    data['customer_embed'] = list(customer_embeddings_tensor.detach().numpy())
+
+    # Group by CustomerID
+    customer_data = data.groupby('CustomerID')
+
+    # Split the data into train, valid, and test sets
+    train_data = {}
+    valid_data = {}
+    test_data = {}
+
+    '''Split the data into train, valid, and test sets such that valid set includes second-last transaction 
+    of each customerID and test set includes last transaction of each customerID'''
+    for customer_id, customer_df in customer_data:
+        if len(customer_df) >= 3:
+            train_data[customer_id] = customer_df.iloc[: -2]
+            valid_data[customer_id] = customer_df.iloc[-2 : -1]
+            test_data[customer_id] = customer_df.iloc[-1 :]
+
+    return train_data, valid_data, test_data, customer_embeddings
+
+
+
+    # # Filter customerIDs with at least 5 records
+    # customer_counts = data['CustomerID'].value_counts()
+    # valid_customers = customer_counts[customer_counts >= 5].index
+    # data = data[data['CustomerID'].isin(valid_customers)]
+    #
+    # # Group by CustomerID and sort by InvoiceDate
+    # grouped = data.groupby('CustomerID').apply(lambda x: x.sort_values('InvoiceDate')).reset_index(drop=True)
+    #
+    # # Create time series data for each CustomerID
+    # customer_data = {}
+    # for customer_id, group in grouped.groupby('CustomerID'):
+    #     group.set_index('InvoiceDate', inplace=True)
+    #     customer_data[customer_id] = group[['CustomerID', 'Quantity', 'Price']]
+
+    # Set other forecasting parameters
+    # scaler = MinMaxScaler() # alternative to StandardScaler which avoid negative values
+    # pred_lens = [1, 2, 3]
+    # n_covariate_cols = 2
+    #
+    # return customer_data
