@@ -17,7 +17,7 @@ def cal_metrics(pred, target):
         'MAE': np.abs(pred - target).mean()
     }
 
-def eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols):
+def eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols, dataset_name = None):
     padding = 200
 
     t = time.time()
@@ -55,13 +55,28 @@ def eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, 
         test_pred = lr.predict(test_features)
         lr_infer_time[pred_len] = time.time() - t
 
-        ori_shape = test_data.shape[0], -1, pred_len, test_data.shape[2]
-        test_pred = test_pred.reshape(ori_shape)
-        test_labels = test_labels.reshape(ori_shape)
+        if dataset_name =='ts2vec_online_retail_II_data':
+            test_pred = test_pred.reshape(-1, 2)
+            test_labels = test_labels.reshape(-1, 2)
+        else:
+            ori_shape = test_data.shape[0], -1, pred_len, test_data.shape[2]
+            test_pred = test_pred.reshape(ori_shape)
+            test_labels = test_labels.reshape(ori_shape)
 
         if test_data.shape[0] > 1:
             test_pred_inv = scaler.inverse_transform(test_pred.swapaxes(0, 3)).swapaxes(0, 3)
             test_labels_inv = scaler.inverse_transform(test_labels.swapaxes(0, 3)).swapaxes(0, 3)
+        elif dataset_name == 'ts2vec_online_retail_II_data':
+            test_pred_inv = scaler.inverse_transform(test_pred.reshape(-1, 2)).reshape(test_pred.shape)
+            test_labels_inv = scaler.inverse_transform(test_labels.reshape(-1, 2)).reshape(test_labels.shape)
+
+            # Remove NaN values from all datasets
+            valid_indices = ~np.isnan(test_pred).any(axis=1) & ~np.isnan(test_pred_inv).any(axis=1) & ~np.isnan(test_labels).any(axis=1) & ~np.isnan(test_labels_inv).any(axis=1)
+            test_pred = test_pred[valid_indices]
+            test_pred_inv = test_pred_inv[valid_indices]
+            test_labels = test_labels[valid_indices]
+            test_labels_inv = test_labels_inv[valid_indices]
+
         else:
             test_pred_inv = scaler.inverse_transform(test_pred)
             test_labels_inv = scaler.inverse_transform(test_labels)
