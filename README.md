@@ -23,6 +23,8 @@ pip install -r requirements.txt
 
 The datasets can be obtained and put into `datasets/` folder in the following way:
 
+* [Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii) should be preprocessed using `stage1_online_retail_pre_processing.py` and put into `datasets/` so that the data file can be located as `datasets/ts2vec_online_retail_II_data.csv`. To run the preprocessing script, ensure the downloaded dataset is saved as `online_retail_II.xlsx` and stored in the same directory as `stage1_online_retail_pre_processing.py` before running `stage1_online_retail_pre_processing.py`.
+* Alternatively, [Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii) can be pro-processed with `stage2_online_retail_pre_processing.py` and put into `datasets/` so the data file can be located as `datasets/restructured_ts2vec_online_retail.csv`. This Stage 2 pre-processing of Online Retail II dataset differs from `stage1_online_retail_pre_processing.py` by including the Customer_ID column. The preprocessing script requires the `online_retail_II.xlsx` to be saved in the same directory as `stage2_online_retail_pre_processing.py` before it can be run.
 * [128 UCR datasets](https://www.cs.ucr.edu/~eamonn/time_series_data_2018) should be put into `datasets/UCR/` so that each data file can be located by `datasets/UCR/<dataset_name>/<dataset_name>_*.csv`.
 * [30 UEA datasets](http://www.timeseriesclassification.com) should be put into `datasets/UEA/` so that each data file can be located by `datasets/UEA/<dataset_name>/<dataset_name>_*.arff`.
 * [3 ETT datasets](https://github.com/zhouhaoyi/ETDataset) should be placed at `datasets/ETTh1.csv`, `datasets/ETTh2.csv` and `datasets/ETTm1.csv`.
@@ -92,3 +94,9 @@ test_repr = model.encode(
 )  # n_instances x n_timestamps x output_dims
 # (The timestamp t's representation vector is computed using the observations located in [t-50, t])
 ```
+
+## Example Run Configurations for train.py: 
+
+restructured_ts2vec_online_retail Results --loader forecast_csv --eval --epochs 250
+
+ts2vec_online_retail_II_data Results --loader forecast_csv --eval --epochs 250
