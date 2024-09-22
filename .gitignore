@@ -3,7 +3,7 @@
 
 # Ignore Jupyter notebook checkpoints
 .ipynb_checkpoints
-
+*.idea/
 # Ignore Python cache files
 __pycache__
 
