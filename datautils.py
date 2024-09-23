@@ -309,7 +309,7 @@ def load_online_retail(name, repr_dims):
     test_data = {}
 
     '''Split the data into train, valid, and test sets such that valid set includes second-last transaction 
-    of each customerID and test set includes last transaction of each customerID '''
+    of each customerID and test set includes last transaction of each customerID'''
     for customer_id, customer_df in customer_data:
         if len(customer_df) >= 3:
             train_data[customer_id] = customer_df.iloc[: -2]
