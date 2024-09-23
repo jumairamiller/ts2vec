@@ -192,7 +192,7 @@ def load_forecast_csv(name, univar=False):
 
     # Normalise data
     scaler = None
-    if name == 'ts2vec_online_retail_II_data':
+    if name == 'ts2vec_online_retail_II_data' or name == 'restructured_ts2vec_online_retail':
         scaler = MinMaxScaler().fit(data[train_slice])
     else:
         scaler = StandardScaler().fit(data[train_slice])
@@ -206,7 +206,7 @@ def load_forecast_csv(name, univar=False):
         data = np.expand_dims(data, 0) # Single instance case
 
     if n_covariate_cols > 0:
-        if name == 'ts2vec_online_retail_II_data':
+        if name == 'ts2vec_online_retail_II_data' or name == 'restructured_ts2vec_online_retail':
             dt_scaler = MinMaxScaler().fit(dt_embed[train_slice])
         else:
             dt_scaler = StandardScaler().fit(dt_embed[train_slice])

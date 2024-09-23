@@ -211,7 +211,7 @@ if __name__ == '__main__':
             out, eval_res = tasks.eval_classification(model, train_data, train_labels, test_data, test_labels, eval_protocol='svm')
         elif task_type == 'forecasting':
             # add case for unsupervised evaluation on Online Retail dataset
-            if args.dataset == 'ts2vec_online_retail_II_data':
+            if args.dataset in 'ts2vec_online_retail_II_data' or 'restructured_ts2vec_online_retail':
                 # # print data shapes and check for NaN or infinite values
                 # print("Data shape:", data.shape)
                 # print("Train slice:", train_slice)
