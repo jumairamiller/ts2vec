@@ -1,3 +1,4 @@
+import logging
 import os
 import numpy as np
 import pandas as pd
@@ -254,8 +255,9 @@ def _get_time_features(dt):
         dt.to_series().apply(lambda x: x.strftime("%V")).astype(int).to_numpy(), # Week of the year
     ], axis=1).astype(np.float)
 
-
-def load_online_retail(name, repr_dims):
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def load_online_retail(name):
 #     """
 #     Loads and preprocesses the Online Retail dataset for forecasting tasks.
 #     Ensures both Price, Quantity, and customer embeddings are included throughout. """
@@ -270,14 +272,21 @@ def load_online_retail(name, repr_dims):
 #     """
 
      # Load data
-    data = pd.read_csv(f'datasets/{name}.csv', parse_dates=['InvoiceDate'])
+    data = pd.read_csv(f'datasets/{name}.csv', index_col='InvoiceDate', parse_dates=True)
 
     # Convert 'InvoiceDate' to datetime if not already done
-    if not pd.api.types.is_datetime64_any_dtype(data['InvoiceDate']):
-        data['InvoiceDate'] = pd.to_datetime(data['InvoiceDate'])
+    if not pd.api.types.is_datetime64_any_dtype(data.index):
+        data.index = pd.to_datetime(data.index)
 
-    # Sort data by 'InvoiceDate'
-    data.sort_values(by='InvoiceDate', inplace=True)
+    # Remove rows with any None or NaN values
+    data.dropna(inplace=True)
+
+    # Remove rows with negative 'Quantity' or 'Price' values
+    data = data[(data['Quantity'] > 0) & (data['Price'] > 0)]
+    logging.info(f"Data shape after removing negative values: {data.shape}")
+
+    # Remove Invoice column
+    data.drop(columns=['Invoice'], inplace=True)
 
     # Rename 'Customer ID' to 'CustomerID'
     if 'Customer ID' in data.columns:
@@ -285,38 +294,64 @@ def load_online_retail(name, repr_dims):
 
     if 'CustomerID' not in data.columns:
         raise KeyError("The 'CustomerID' column is missing from the dataset.")
+    logging.info(f"Data columns and shape: {data.columns, data.shape}")
 
     # Extract customerIDs and create numerical mapping
     customer_ids = data['CustomerID'].unique()
+    logging.info(f"Unique customer ID count: {customer_ids.shape[0]}")
     customer_id_to_index = {cid: idx for idx, cid in enumerate(customer_ids)}
+    logging.info(f"Unique customer ID to index count: {len(customer_id_to_index)}")
 
     # Create fixed embeddings for each unique customer ID
-    customer_embeddings = torch.nn.Embedding(len(customer_ids), repr_dims)
+    customer_embeddings = torch.nn.Embedding(len(customer_ids), 4)
     customer_embeddings.weight.requires_grad = False  # Fixed embeddings
 
     # Map customer IDs to their embeddings
     customer_embeddings_tensor = customer_embeddings(torch.tensor(data['CustomerID'].map(customer_id_to_index).values))
+    logging.info(f"Customer embeddings shape: {customer_embeddings_tensor.shape}")
+    logging.info(f"Customer embeddings: {customer_embeddings_tensor}")
 
-    # Store customer embeddings as a new column 'customer_embed' in the DataFrame
-    data['customer_embed'] = list(customer_embeddings_tensor.detach().numpy())
+    # Replace 'CustomerID' column with the corresponding customer embedding
+    customer_embeddings_expanded = customer_embeddings_tensor.detach().numpy()
+    logging.info(f"Customer embeddings expanded shape: {customer_embeddings_expanded.shape}")
 
-    # Group by CustomerID
-    customer_data = data.groupby('CustomerID')
+    # Drop the original 'CustomerID' column
+    data = data.drop(columns=['CustomerID'])
 
-    # Split the data into train, valid, and test sets
-    train_data = {}
-    valid_data = {}
-    test_data = {}
+    # Extract time features for the date/index column
+    dt_embed = _get_time_features(data.index)
+    n_covariate_cols = dt_embed.shape[-1] + customer_embeddings_expanded.shape[-1]
+    logging.info(f"Number of covariate columns: {n_covariate_cols}")
+    logging.info(f"Time features shape: {dt_embed.shape}")
 
-    '''Split the data into train, valid, and test sets such that valid set includes second-last transaction 
-    of each customerID and test set includes last transaction of each customerID'''
-    for customer_id, customer_df in customer_data:
-        if len(customer_df) >= 3:
-            train_data[customer_id] = customer_df.iloc[: -2]
-            valid_data[customer_id] = customer_df.iloc[-2 : -1]
-            test_data[customer_id] = customer_df.iloc[-1 :]
+    # Convert the DataFrame to a NumPy array
+    data = data.to_numpy()
 
-    return train_data, valid_data, test_data, customer_embeddings
+    train_slice = slice(0, int(0.6 * len(data)))
+    valid_slice = slice(int(0.6 * len(data)), int(0.8 * len(data)))
+    test_slice = slice(int(0.8 * len(data)), len(data))
+
+    # Normalise data
+    scaler = MinMaxScaler().fit(data[train_slice])
+    data = scaler.transform(data)
+
+    # Reshape data based on dataset structure
+    data = np.expand_dims(data, 0) # Single instance case
+
+    if n_covariate_cols > 0:
+        dt_scaler = MinMaxScaler().fit(dt_embed[train_slice])
+        dt_embed = np.expand_dims(dt_scaler.transform(dt_embed), 0)
+        # Concatenating the time embeddings to the data
+        data = np.concatenate([np.repeat(dt_embed, data.shape[0], axis=0), data], axis=-1)
+
+        cid_scaler = MinMaxScaler().fit(customer_embeddings_expanded[train_slice])
+        cid_embed = np.expand_dims(cid_scaler.transform(customer_embeddings_expanded), 0)
+        # Concatenating the customer ID embeddings to the data
+        data = np.concatenate([np.repeat(cid_embed, data.shape[0], axis=0), data], axis=-1)
+
+    pred_lens = [1, 2, 3, 4, 5]
+
+    return data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols
 
 
 

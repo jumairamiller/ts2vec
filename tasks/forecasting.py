@@ -107,7 +107,7 @@ def eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, 
         }
     return out_log, eval_res
 
-def eval_forecasting_customer_embed(model, data, train_slice, valid_slice, test_slice, scaler, n_covariate_cols):
+def eval_forecasting_customer_embed(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols):
     padding = 200
 
     t = time.time()
@@ -125,14 +125,53 @@ def eval_forecasting_customer_embed(model, data, train_slice, valid_slice, test_
     valid_repr = all_repr[:, valid_slice]
     test_repr = all_repr[:, test_slice]
 
-    # You can now use train_repr, valid_repr, and test_repr for unsupervised tasks (e.g., clustering, visualization)
+    # Extract data for each time slice
+    train_data = data[:, train_slice, n_covariate_cols:]
+    valid_data = data[:, valid_slice, n_covariate_cols:]
+    test_data = data[:, test_slice, n_covariate_cols:]
 
-    eval_res = {
-        'ts2vec_infer_time': ts2vec_infer_time,
-        'train_repr_shape': train_repr.shape,
-        'valid_repr_shape': valid_repr.shape,
-        'test_repr_shape': test_repr.shape
-    }
+    ours_result = {}
+    lr_train_time = {}
+    lr_infer_time = {}
+    out_log = {}
+    for pred_len in pred_lens:
+        train_features, train_labels = generate_pred_samples(train_repr, train_data, pred_len, drop=padding)
+        valid_features, valid_labels = generate_pred_samples(valid_repr, valid_data, pred_len)
+        test_features, test_labels = generate_pred_samples(test_repr, test_data, pred_len)
 
-    return eval_res
+        t = time.time()
+        lr = eval_protocols.fit_ridge(train_features, train_labels, valid_features, valid_labels)
+        lr_train_time[pred_len] = time.time() - t
+
+        t = time.time()
+        test_pred = lr.predict(test_features)
+        lr_infer_time[pred_len] = time.time() - t
+
+        test_pred = test_pred.reshape(-1, 2)
+        test_labels = test_labels.reshape(-1, 2)
+
+        test_pred_inv = scaler.inverse_transform(test_pred.reshape(-1, 2)).reshape(test_pred.shape)
+        test_labels_inv = scaler.inverse_transform(test_labels.reshape(-1, 2)).reshape(test_labels.shape)
+
+        # NOTE: You can now use train_repr, valid_repr, and test_repr for unsupervised tasks (e.g., clustering, visualization)
+
+        out_log[pred_len] = {
+            'norm': test_pred,
+            'raw': test_pred_inv,
+            'norm_gt': test_labels,
+            'raw_gt': test_labels_inv
+        }
+        ours_result[pred_len] = {
+            'norm': cal_metrics(test_pred, test_labels),
+            'raw': cal_metrics(test_pred_inv, test_labels_inv)
+        }
+
+        eval_res = {
+            'ours': ours_result,
+            'ts2vec_infer_time': ts2vec_infer_time,
+            'lr_train_time': lr_train_time,
+            'lr_infer_time': lr_infer_time
+        }
+
+    return out_log, eval_res
 

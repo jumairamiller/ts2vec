@@ -72,7 +72,6 @@ if __name__ == '__main__':
         task_type = 'forecasting'
         data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols = datautils.load_forecast_csv(args.dataset)
         train_data = data[:, train_slice]
-        test_data = data[:, test_slice]
 
     elif args.loader == 'forecast_csv_univar':
         task_type = 'forecasting'
@@ -99,11 +98,11 @@ if __name__ == '__main__':
         all_train_data, all_train_labels, all_train_timestamps, all_test_data, all_test_labels, all_test_timestamps, delay = datautils.load_anomaly(args.dataset)
         train_data, _, _, _ = datautils.load_UCR('FordA')
 
-    # elif args.loader == 'retail':
-    #     task_type = 'forecasting'
-    #
-    #     # Load the data
-    #     train_data, valid_data, test_data, customer_embeddings = datautils.load_online_retail(args.dataset, repr_dims=args.repr_dims)
+    elif args.loader == 'retail':
+        task_type = 'forecasting'
+        # Load the data
+        data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols = datautils.load_online_retail(args.dataset)
+        train_data = data[:, train_slice]
 
     else:
         raise ValueError(f"Unknown loader {args.loader}.")
@@ -133,55 +132,20 @@ if __name__ == '__main__':
     t = time.time()
 
     # Define the TS2Vec model
-    if args.loader == 'retail':
-        # Initialise the loss log fir tracking losses during training
-        loss_log = []
-        # Initialise the model
-        model = TS2Vec(
-            input_dims=2,  # We are using 'Quantity' and 'Price' as input dimensions
-            device=device,
-            **config,
-            use_customer_embs=True  # Specify that we are using customer embeddings
-        )
-
-        # Training loop with customer ID fixed embeddings as input
-        for epoch in range(args.epochs):
-            '''For retail loader, `train_data`, `valid_data`, and `test_data` are dictionaries where each key is
-            a `customer_id` and the value is a DataFrame with shape `(n_transactions, n_features)`. The model will 
-            train on 'data_array`, which is reshaped to `(n_instances, n_timestamps, n_dimensions)`.'''
-            epoch_loss = 0
-            for customer_id, data in train_data.items():
 
 
-                # Get the customer embedding
-                customer_idx = torch.tensor(customer_id_to_index[customer_id], device = device)
-                customer_embedding = customer_embedding_layer(customer_idx).unsqueeze(0).unsqueeze(0)
-
-                # Convert data to the required format
-                data_array = data.to_numpy()
-                data_array = torch.tensor(data_array, dtype=torch.float32, device=device)  # Ensure data_array is a torch.Tensor
-
-                # Add the customer embedding to the data
-                data_array += customer_embedding
-
-                # Convert back to NumPy array before training the model
-                data_array = data_array.cpu().numpy()
-
-                # train the model
-                loss_log = model.fit(data_array, n_epochs=1, n_iters=args.iters, verbose=True)
-    else:
-        model = TS2Vec(
-            input_dims=train_data.shape[-1],
-            device=device,
-            **config
-        )
-        # Training code
-        loss_log = model.fit(
-            train_data,
-            n_epochs=args.epochs,
-            n_iters=args.iters,
-            verbose=True
-        )
+    model = TS2Vec(
+        input_dims=train_data.shape[-1],
+        device=device,
+        **config
+    )
+    # Training code
+    loss_log = model.fit(
+        train_data,
+        n_epochs=args.epochs,
+        n_iters=args.iters,
+        verbose=True
+    )
 
     model.save(f'{run_dir}/model.pkl')
 
@@ -212,15 +176,18 @@ if __name__ == '__main__':
         elif task_type == 'forecasting':
             # add case for unsupervised evaluation on Online Retail dataset
             if args.dataset in 'ts2vec_online_retail_II_data' or 'restructured_ts2vec_online_retail':
-                # # print data shapes and check for NaN or infinite values
-                # print("Data shape:", data.shape)
-                # print("Train slice:", train_slice)
-                # print("Valid slice:", valid_slice)
-                # print("Test slice:", test_slice)
-                # print("Scaler:", scaler)
-                # print("Prediction lengths:", pred_lens)
-                # print("Number of covariate columns:", n_covariate_cols)
-                out, eval_res = tasks.eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols, args.dataset)
+                # print data shapes and check for NaN or infinite values
+                print("Data shape:", data.shape)
+                print("Train slice:", train_slice)
+                print("Valid slice:", valid_slice)
+                print("Test slice:", test_slice)
+                print("Scaler:", scaler)
+                print("Prediction lengths:", pred_lens)
+                print("Number of covariate columns:", n_covariate_cols)
+                if args.loader == 'retail':
+                    out, eval_res = tasks.eval_forecasting_customer_embed(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols)
+                else:
+                    out, eval_res = tasks.eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols, args.dataset)
 
             else:
                 out, eval_res = tasks.eval_forecasting(model, data, train_slice, valid_slice, test_slice, scaler, pred_lens, n_covariate_cols)
